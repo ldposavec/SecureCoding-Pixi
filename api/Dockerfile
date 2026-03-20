@@ -1,6 +1,6 @@
 FROM node:alpine
-RUN apk add --no-cache make gcc g++ python
-RUN mkdir -p /usr/src/pixi/api
+RUN apk add --no-cache make gcc g++ python && \
+    mkdir -p /usr/src/pixi/api
 WORKDIR /usr/src/pixi/api
 COPY package.json /usr/src/pixi/api
 

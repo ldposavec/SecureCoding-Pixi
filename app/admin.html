@@ -8,7 +8,7 @@
 	<link rel="stylesheet" href="../css/font-awesome.min.css">
 	<link rel="stylesheet" href="https://ajax.googleapis.com/ajax/libs/angular_material/1.1.0/angular-material.min.css">
 	<style>
-		body {background-color: #eceeef} ;
+		body {background-color: #eceeef}
 	</style>
 
 
@@ -16,12 +16,10 @@
 
 	<!-- Latest compiled and minified JavaScript -->
 
-    <!--		<script src='../js/jquery.min.js'></script>-->
     +<script src="https://code.jquery.com/jquery-3.7.1.min.js"
              integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo="
              crossorigin="anonymous"></script>
     <script src="../js/bootstrap.min.js"></script>
-    <!--        <script src='../js/angular.min.js'></script>-->
     <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.8.3/angular.min.js"></script>
     <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.8.3/angular-sanitize.min.js"></script>
     <script src='../js/ng-file-upload.min.js'></script>
@@ -54,14 +52,16 @@
 				<br><br><br>
 
 				<form action='/admin/likes/search' method='GET'>
-				<input type="text" class="form-control form-control-lg" id="search" name="search" aria-describedby="emailHelp" placeholder="Search for likes">
+				<input type="text" class="form-control form-control-lg" id="search_likes" name="search"
+                       aria-describedby="emailHelp" placeholder="Search for likes">
 				<button type="submit" class="btn btn-info">Likes Search</button>
 								   
 				</form>
 				<br><br><br>
 
 				<form action='/admin/loves/search' method='GET'>
-				<input type="text" class="form-control form-control-lg" id="search" name="search" aria-describedby="emailHelp" placeholder="Search for likes">
+				<input type="text" class="form-control form-control-lg" id="search_loves" name="search"
+                       aria-describedby="emailHelp" placeholder="Search for likes">
 				<button type="submit" class="btn btn-info">Loves Search</button>
 								   
 				</form>
