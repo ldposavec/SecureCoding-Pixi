@@ -62,11 +62,6 @@ abbr[title] {
   text-decoration: underline dotted;
 }
 
-/*b,*/
-/*strong {*/
-/*  font-weight: inherit;*/
-/*}*/
-
 b,
 strong {
   font-weight: bolder;

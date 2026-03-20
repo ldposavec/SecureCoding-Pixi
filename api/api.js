@@ -95,7 +95,7 @@ function buildRegistrationName() {
 }
 
 function sendRegistrationToken(res, newUser) {
-    if (newUser == null || !newUser.ops || !newUser.ops[0]) {
+    if (!newUser?.ops?.[0]) {
         return res.status(500).json({ message: 'Registration failed' });
     }
     const createdUser = newUser.ops[0];
