@@ -7,6 +7,7 @@ const unless = require('express-unless');
 const randomWords = require('random-words');
 const Sentencer = require('sentencer');
 const faker = require('faker');
+const crypto = require('crypto');
 
 //database stuff
 var ObjectID = require('mongodb').ObjectID;
@@ -29,6 +30,11 @@ const {login} = require("passport/lib/http/request");
 
 //var dbname = 'mongodb://localhost:27017/Pixidb';
 var dbname = 'mongodb://pixidb:27017/Pixidb';
+var ACCESS_TOKEN_EXPIRY_SECONDS = config.access_token_expiry_seconds > 0 ? config.access_token_expiry_seconds : 9;
+var REFRESH_TOKEN_EXPIRY_MS = config.refresh_token_expiry_ms > 0 ? config.refresh_token_expiry_ms : 604800000;
+var REFRESH_TOKEN_CLEANUP_MS = config.refresh_token_cleanup_ms > 0 ? config.refresh_token_cleanup_ms : 3600000;
+var REFRESH_TOKEN_BYTES = config.refresh_token_bytes > 0 ? config.refresh_token_bytes : 48;
+
 //create express server and register global middleware
 var api = express();
 api.use(bodyParser.json());
@@ -85,6 +91,260 @@ mongo.connect(dbname, function(err, db) {
   }
 });
 
+ensureRefreshTokenIndexes();
+scheduleRefreshTokenCleanup();
+
+
+function ensureRefreshTokenIndexes() {
+	mongo.connect(dbname, function(err, db) {
+		if (err) {
+			console.log('Could not create refresh token indexes');
+			return;
+		}
+		db.collection('refresh_tokens').createIndex({ token: 1 }, { unique: true }, function(indexErr) {
+			if (indexErr) {
+				console.log('Failed creating refresh token unique index');
+			}
+		});
+		db.collection('refresh_tokens').createIndex({ user_id: 1, revoked: 1 }, function() {});
+		db.collection('refresh_tokens').createIndex({ expiryDate: 1 }, function() {});
+	});
+}
+
+function scheduleRefreshTokenCleanup() {
+	setInterval(function() {
+		deleteExpiredRefreshTokens(function(err, deletedCount) {
+			if (err) {
+				console.log('Refresh token cleanup failed');
+				return;
+			}
+			if (deletedCount > 0) {
+				console.log('Deleted ' + deletedCount + ' expired refresh tokens');
+			}
+		});
+	}, REFRESH_TOKEN_CLEANUP_MS);
+}
+
+function getAccessTokenFromRequest(req) {
+	var header = req.headers.authorization;
+	if (header && header.indexOf('Bearer ') === 0) {
+		return header.substring(7);
+	}
+	return req.headers['x-access-token'] || null;
+}
+
+function api_bearer_auth(req, res, next) {
+	var token = getAccessTokenFromRequest(req);
+	if (!token) {
+		return res.status(401).json({ message: 'Missing access token' });
+	}
+
+	jwt.verify(token, config.session_secret, function(err, user) {
+		if (err) {
+			return res.status(401).json({ message: 'Invalid access token' });
+		}
+		req.user = user;
+		next();
+	});
+}
+
+function buildAccessPayload(userDoc) {
+	return {
+		user: {
+			_id: userDoc._id,
+			email: userDoc.email,
+			name: userDoc.name,
+			is_admin: userDoc.is_admin,
+			pic: userDoc.pic
+		}
+	};
+}
+
+function createAccessToken(userDoc) {
+	return jwt.sign(buildAccessPayload(userDoc), config.session_secret, {
+		expiresIn: ACCESS_TOKEN_EXPIRY_SECONDS
+	});
+}
+
+function buildTokenPair(userDoc, refreshTokenValue) {
+	return {
+		accessToken: createAccessToken(userDoc),
+		refreshToken: refreshTokenValue,
+		expiresIn: ACCESS_TOKEN_EXPIRY_SECONDS,
+		tokenType: 'Bearer'
+	};
+}
+
+function generateRefreshTokenValue() {
+	return crypto.randomBytes(REFRESH_TOKEN_BYTES).toString('hex');
+}
+
+function createRefreshTokenForUser(db, userId, tokenValue, cb) {
+	var token = tokenValue || generateRefreshTokenValue();
+	var refreshToken = {
+		token: token,
+		expiryDate: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS),
+		revoked: false,
+		user_id: Number(userId),
+		createdAt: new Date(),
+		replacedByToken: null
+	};
+
+	db.collection('refresh_tokens').insert(refreshToken, function(err, result) {
+		if (err && err.code === 11000) {
+			return createRefreshTokenForUser(db, userId, null, cb);
+		}
+		if (err) {
+			return cb(err);
+		}
+		var inserted = (result && result.ops && result.ops[0]) ? result.ops[0] : refreshToken;
+		cb(null, inserted);
+	});
+}
+
+function findRefreshTokenByToken(db, token, cb) {
+	db.collection('refresh_tokens').findOne({ token: token }, cb);
+}
+
+function findActiveRefreshTokenByToken(db, token, cb) {
+	db.collection('refresh_tokens').findOne({ token: token, revoked: false }, cb);
+}
+
+function revokeRefreshTokenByToken(db, token, replacedByToken, cb) {
+	var update = { revoked: true };
+	if (replacedByToken) {
+		update.replacedByToken = replacedByToken;
+	}
+	db.collection('refresh_tokens').update(
+		{ token: token },
+		{ $set: update },
+		cb
+	);
+}
+
+function revokeAllRefreshTokensByUserId(db, userId, cb) {
+	db.collection('refresh_tokens').update(
+		{ user_id: Number(userId), revoked: false },
+		{ $set: { revoked: true } },
+		{ multi: true },
+		cb
+	);
+}
+
+function deleteExpiredRefreshTokens(cb) {
+	mongo.connect(dbname, function(err, db) {
+		if (err) {
+			return cb(err);
+		}
+		db.collection('refresh_tokens').remove({ expiryDate: { $lt: new Date() } }, { multi: true }, function(deleteErr, result) {
+			if (deleteErr) {
+				return cb(deleteErr);
+			}
+			var removed = 0;
+			if (result && typeof result.result === 'object' && typeof result.result.n === 'number') {
+				removed = result.result.n;
+			}
+			cb(null, removed);
+		});
+	});
+}
+
+function findUserByCredentials(email, pass, cb) {
+	mongo.connect(dbname, function(err, db) {
+		if (err) {
+			return cb(err);
+		}
+		db.collection('users').findOne({ email: email, password: pass }, cb);
+	});
+}
+
+function findUserById(userId, cb) {
+	mongo.connect(dbname, function(err, db) {
+		if (err) {
+			return cb(err);
+		}
+		db.collection('users').findOne({ _id: Number(userId) }, cb);
+	});
+}
+
+function issueTokenPairForUser(userDoc, cb) {
+	mongo.connect(dbname, function(err, db) {
+		if (err) {
+			return cb(err);
+		}
+		createRefreshTokenForUser(db, userDoc._id, null, function(createErr, refreshToken) {
+			if (createErr) {
+				return cb(createErr);
+			}
+			cb(null, buildTokenPair(userDoc, refreshToken.token));
+		});
+	});
+}
+
+function rotateActiveRefreshToken(db, tokenDoc, cb) {
+	findUserById(tokenDoc.user_id, function(userErr, userDoc) {
+		var replacementToken;
+		if (userErr) {
+			return cb(userErr);
+		}
+		if (!userDoc) {
+			return cb({ type: 'INVALID_TOKEN' });
+		}
+
+		replacementToken = generateRefreshTokenValue();
+		revokeRefreshTokenByToken(db, tokenDoc.token, replacementToken, function(revokeErr) {
+			if (revokeErr) {
+				return cb(revokeErr);
+			}
+
+			createRefreshTokenForUser(db, tokenDoc.user_id, replacementToken, function(createErr, createdToken) {
+				if (createErr) {
+					return cb(createErr);
+				}
+				cb(null, buildTokenPair(userDoc, createdToken.token));
+			});
+		});
+	});
+}
+
+function rotateRefreshToken(refreshTokenString, cb) {
+	mongo.connect(dbname, function(err, db) {
+		if (err) {
+			return cb(err);
+		}
+
+		findRefreshTokenByToken(db, refreshTokenString, function(findErr, tokenDoc) {
+			if (findErr) {
+				return cb(findErr);
+			}
+			if (!tokenDoc) {
+				return cb({ type: 'INVALID_TOKEN' });
+			}
+			if (tokenDoc.revoked) {
+				console.log('SECURITY WARNING: Reuse attempt for revoked refresh token user_id=' + tokenDoc.user_id);
+				return revokeAllRefreshTokensByUserId(db, tokenDoc.user_id, function() {
+					cb({ type: 'TOKEN_REUSE' });
+				});
+			}
+			if (new Date(tokenDoc.expiryDate).getTime() <= Date.now()) {
+				return revokeRefreshTokenByToken(db, tokenDoc.token, null, function() {
+					cb({ type: 'TOKEN_EXPIRED' });
+				});
+			}
+
+			findActiveRefreshTokenByToken(db, refreshTokenString, function(activeErr, activeTokenDoc) {
+				if (activeErr) {
+					return cb(activeErr);
+				}
+				if (!activeTokenDoc) {
+					return cb({ type: 'INVALID_TOKEN' });
+				}
+				rotateActiveRefreshToken(db, activeTokenDoc, cb);
+			});
+		});
+	});
+}
+
 
 // functions
 function api_authenticate(user, pass, req, res){
@@ -116,6 +376,122 @@ function api_authenticate(user, pass, req, res){
 
 	});
 }
+
+api.post('/api/auth/login', function(req, res) {
+	if (!req.body.user || !req.body.pass) {
+		return res.status(400).json({ message: 'missing username and or password parameters' });
+	}
+
+	findUserByCredentials(String(req.body.user).toLowerCase(), req.body.pass, function(err, userDoc) {
+		if (err) {
+			return res.status(500).json({ message: 'login failed' });
+		}
+		if (!userDoc) {
+			return res.status(401).json({ message: 'invalid credentials' });
+		}
+
+		issueTokenPairForUser(userDoc, function(issueErr, tokenPair) {
+			if (issueErr) {
+				return res.status(500).json({ message: 'token creation failed' });
+			}
+			res.status(200).json(tokenPair);
+		});
+	});
+});
+
+api.post('/api/auth/refresh', function(req, res) {
+	var refreshTokenString = req.body.refreshToken;
+	if (!refreshTokenString || typeof refreshTokenString !== 'string') {
+		return res.status(400).json({ message: 'refreshToken is required in request body' });
+	}
+
+	rotateRefreshToken(refreshTokenString, function(err, tokenPair) {
+		if (err && err.type === 'INVALID_TOKEN') {
+			return res.status(401).json({ message: 'invalid refresh token' });
+		}
+		if (err && err.type === 'TOKEN_EXPIRED') {
+			return res.status(401).json({ message: 'refresh token expired' });
+		}
+		if (err && err.type === 'TOKEN_REUSE') {
+			return res.status(403).json({ message: 'refresh token reuse detected; all sessions revoked' });
+		}
+		if (err) {
+			return res.status(500).json({ message: 'refresh failed' });
+		}
+
+		res.status(200).json(tokenPair);
+	});
+});
+
+api.post('/api/auth/logout', api_bearer_auth, function(req, res) {
+	if (!req.user || !req.user.user || !req.user.user._id) {
+		return res.status(401).json({ message: 'invalid access token payload' });
+	}
+
+	mongo.connect(dbname, function(err, db) {
+		if (err) {
+			return res.status(500).json({ message: 'logout failed' });
+		}
+		revokeAllRefreshTokensByUserId(db, req.user.user._id, function(revokeErr) {
+			if (revokeErr) {
+				return res.status(500).json({ message: 'logout failed' });
+			}
+			res.status(204).send();
+		});
+	});
+});
+
+api.post('/api/auth/revoke', api_bearer_auth, function(req, res) {
+	if (!req.user || !req.user.user || req.user.user.is_admin !== true) {
+		return res.status(403).json({ message: 'admin access required' });
+	}
+	if (!req.body.userId) {
+		return res.status(400).json({ message: 'userId is required' });
+	}
+
+	mongo.connect(dbname, function(err, db) {
+		if (err) {
+			return res.status(500).json({ message: 'revocation failed' });
+		}
+		revokeAllRefreshTokensByUserId(db, req.body.userId, function(revokeErr) {
+			if (revokeErr) {
+				return res.status(500).json({ message: 'revocation failed' });
+			}
+			res.status(204).send();
+		});
+	});
+});
+
+api.post('/api/auth/revoke-token', api_bearer_auth, function(req, res) {
+	if (!req.body.refreshToken || typeof req.body.refreshToken !== 'string') {
+		return res.status(400).json({ message: 'refreshToken is required' });
+	}
+
+	mongo.connect(dbname, function(err, db) {
+		if (err) {
+			return res.status(500).json({ message: 'revocation failed' });
+		}
+
+		findRefreshTokenByToken(db, req.body.refreshToken, function(findErr, tokenDoc) {
+			if (findErr) {
+				return res.status(500).json({ message: 'revocation failed' });
+			}
+			if (!tokenDoc) {
+				return res.status(404).json({ message: 'refresh token not found' });
+			}
+			if (req.user.user.is_admin !== true && Number(tokenDoc.user_id) !== Number(req.user.user._id)) {
+				return res.status(403).json({ message: 'not allowed to revoke this token' });
+			}
+
+			revokeRefreshTokenByToken(db, tokenDoc.token, null, function(revokeErr) {
+				if (revokeErr) {
+					return res.status(500).json({ message: 'revocation failed' });
+				}
+				res.status(204).send();
+			});
+		});
+	});
+});
 
 function api_register(user, pass, req, res){
 	console.log('in register');
@@ -832,11 +1208,19 @@ api.get('/pixi', api_token_check, function(req, res){
 })
 // csrf prevention - module cs
 //use csurf middleware to protect against csurf attacks - does not apily to GET requests unless ignoreMethods option is used
-api.use(csurf({ cookie: { httpOnly: true, sameSite: 'strict' } }));
+var apiCsrfProtection = csurf({ cookie: { httpOnly: true, sameSite: 'strict' } });
+api.use(function(req, res, next) {
+	if (req.path === '/api/auth/login' || req.path === '/api/auth/refresh') {
+		return next();
+	}
+	return apiCsrfProtection(req, res, next);
+});
 
 //set XSRF-TOKEN cookie for each request
 api.use(function(req, res, next){
-	res.cookie('CSRF-TOKEN', req.csrfToken(), { httpOnly: false, sameSite: 'strict' });
+	if (typeof req.csrfToken === 'function') {
+		res.cookie('CSRF-TOKEN', req.csrfToken(), { httpOnly: false, sameSite: 'strict' });
+	}
 	next();
 });
 
