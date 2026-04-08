@@ -2,18 +2,17 @@
 <!DOCTYPE html>
 <html lang="en">
 	<head>
-	
+
 		<!-- Latest compiled and minified CSS -->
 		<link rel="stylesheet" href="../css/bootstrap.min.css">
 		<link rel="stylesheet" href="../css/font-awesome.min.css">
 		<style>
-			body {background-color: #eceeef} ;
+			body {background-color: #eceeef}
 		</style>
 		<!-- Optional theme -->
-	
+
 		<!-- Latest compiled and minified JavaScript -->
 
-        <!--		<script src='../js/jquery.min.js'></script>-->
         <script src="https://code.jquery.com/jquery-3.7.1.min.js"
                 integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo="
                 crossorigin="anonymous"></script>
@@ -34,18 +33,18 @@
 				</div>
 				<div class="col-md-7">
 					<br><br><br>
-					
-				
+
+
 							<ul class="nav nav-pills nav-fill justify-content-end" data-ng-init="user_info();">
 								<li class="nav-item"> <a class="nav-link active bg-info" href='/about'>About <i class="fa fa-cogs" aria-hidden="true"></i> </span></a></li>
 				                <li class="nav-item" ><a class="nav-link" href='/pixi'>Share Pictures <i class="fa fa-bullhorn" aria-hidden="true"></i></a></li>
 								<li class="nav-item"><a class="nav-link" href='/profile/{{ user._id }}' >My Profile <i class="fa fa-user-circle" aria-hidden="true"></i> </a></li>
-				                <li class="nav-item"><a class="nav-link" href='/logout'>Logout <i class="fa fa-sign-out" aria-hidden="true"></i> </a></li> 
+				                <li class="nav-item"><a class="nav-link" href='/logout'>Logout <i class="fa fa-sign-out" aria-hidden="true"></i> </a></li>
 				                <li class="nav=item"><a class="nav-link disabled" href="/secret"> Secret <i class="fa fa-user-secret" aria-hidden="true"></i></a></li>
-			                </ul>			   
+			                </ul>
 			    </div>
 			</div>
-		
+
 
 		<br> <br>
 		<h1>Pixi CTF Mode  &nbsp; &nbsp; &nbsp; <button type="button" class="btn btn-info"><a href="/about" style="color:#fff">OWASP Top 10 Mode</a></button></h1>
@@ -84,7 +83,7 @@
 
 
 		</div>
-		</div>			
+		</div>
 	</body>
 
 
@@ -96,7 +95,7 @@
 				$http.get('/user_info/')
 					.then(function success(response){
 						$scope.user = response.data[0];
-					})		
+					})
 			}
 
 		});
